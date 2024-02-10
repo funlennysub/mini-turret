@@ -8,6 +8,6 @@ edition = "2021"
 [dependencies]
 serial2 = "0.2.19"
 opencv = "0.88"
-windows = "0.52.0"
+#windows = "0.52.0"
 
 thiserror.workspace = true

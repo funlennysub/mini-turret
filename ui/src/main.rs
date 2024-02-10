@@ -13,6 +13,10 @@ fn main() {
         ..Default::default()
     };
 
-    eframe::run_native("Mini-Turret", options, Box::new(|_cc| Box::new(App::new())))
-        .expect("TODO: panic message");
+    eframe::run_native(
+        "Mini-Turret",
+        options,
+        Box::new(|cc| Box::new(App::new(cc))),
+    )
+    .expect("TODO: panic message");
 }
