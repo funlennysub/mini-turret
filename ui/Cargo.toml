@@ -1,0 +1,13 @@
+[package]
+name = "ui"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+eframe = { version = "0.26.0", features = ["wgpu"] }
+egui_extras = { version = "0.26.0" }
+
+thiserror.workspace = true
+backend.workspace = true

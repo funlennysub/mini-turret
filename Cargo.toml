@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["backend", "ui"]
+
+[workspace.dependencies]
+thiserror = "1.0.56"
+
+backend = { path = "backend" }
