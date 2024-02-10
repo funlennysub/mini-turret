@@ -1,3 +1,4 @@
+use crate::cv::vision::Vision;
 use serial2::SerialPort;
 use std::path::{Path, PathBuf};
 
@@ -11,11 +12,12 @@ pub fn list_devices() -> Result<Vec<PathBuf>> {
 }
 
 #[derive(Default)]
-pub struct Controller {
+pub struct Turret {
     pub port: Option<SerialPort>,
+    pub vision: Vision,
 }
 
-impl Controller {
+impl Turret {
     pub fn connect(&mut self, port: impl AsRef<Path>) -> Result<()> {
         self.port = Some(SerialPort::open(port, 115200)?);
 
