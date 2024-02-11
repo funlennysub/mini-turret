@@ -10,43 +10,60 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(serde::Deserialize, serde::Serialize)]
-struct Calibrator {
+struct CameraSettings {
     /// (H, S, V)
     upper_bound: (u8, u8, u8),
     /// (H, S, V)
     lower_bound: (u8, u8, u8),
 
+    gray_img: bool,
+    flip_frame: bool,
     min_bb_size: f64,
 }
 
-impl Default for Calibrator {
+impl Default for CameraSettings {
     fn default() -> Self {
         Self {
             upper_bound: (255, 255, 255),
             lower_bound: (0, 0, 0),
+            gray_img: false,
+            flip_frame: false,
             min_bb_size: 500.0,
         }
     }
 }
 
-impl Calibrator {
+impl CameraSettings {
+    fn toggles(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.toggle_value(&mut self.gray_img, "Gray");
+            ui.toggle_value(&mut self.flip_frame, "Flip image");
+        });
+    }
+
     fn bb_size(&mut self, ui: &mut Ui) {
         ui.add(
-            Slider::new(&mut self.min_bb_size, 0f64..=5000f64)
+            Slider::new(&mut self.min_bb_size, 0f64..=50000f64)
                 .step_by(1f64)
                 .text("BB Size"),
         );
     }
     fn upper(&mut self, ui: &mut Ui) {
-        ui.add(Slider::new(&mut self.upper_bound.0, 0..=255).text("Upper hue"));
-        ui.add(Slider::new(&mut self.upper_bound.1, 0..=255).text("Upper saturation"));
-        ui.add(Slider::new(&mut self.upper_bound.2, 0..=255).text("Upper value"));
+        ui.vertical(|ui| {
+            ui.monospace("Upper bound:");
+            ui.add(Slider::new(&mut self.upper_bound.0, 0..=255).text("Hue"));
+            ui.add(Slider::new(&mut self.upper_bound.1, 0..=255).text("Saturation"));
+            ui.add(Slider::new(&mut self.upper_bound.2, 0..=255).text("Value"));
+        });
     }
 
     fn lower(&mut self, ui: &mut Ui) {
-        ui.add(Slider::new(&mut self.lower_bound.0, 0..=255).text("Lower hue"));
-        ui.add(Slider::new(&mut self.lower_bound.1, 0..=255).text("Lower saturation"));
-        ui.add(Slider::new(&mut self.lower_bound.2, 0..=255).text("Lower value"));
+        ui.vertical(|ui| {
+            ui.monospace("Lower bound:");
+            ui.add(Slider::new(&mut self.lower_bound.0, 0..=255).text("Hue"));
+            ui.add(Slider::new(&mut self.lower_bound.1, 0..=255).text("Saturation"));
+            ui.add(Slider::new(&mut self.lower_bound.2, 0..=255).text("Value"));
+        });
     }
 }
 
@@ -56,8 +73,8 @@ pub(crate) struct App {
     turret: Turret,
     port: Option<PathBuf>,
 
-    calibrator_open: bool,
-    calibrator: Calibrator,
+    cam_settings_open: bool,
+    cam_settings: CameraSettings,
 
     error: Option<Error>,
     error_open: bool,
@@ -70,12 +87,12 @@ impl App {
 
         let calibrator = cc
             .storage
-            .and_then(|s| eframe::get_value(s, "calibrator"))
+            .and_then(|s| eframe::get_value(s, "cam-settings"))
             .unwrap_or_default();
 
         Self {
             turret,
-            calibrator,
+            cam_settings: calibrator,
             ..Default::default()
         }
     }
@@ -113,7 +130,7 @@ impl App {
 
     fn calibrate_btn(&mut self, ui: &mut Ui) {
         if ui.button("Calibrate color").clicked() {
-            self.calibrator_open = !self.calibrator_open;
+            self.cam_settings_open = !self.cam_settings_open;
         }
     }
 
@@ -124,16 +141,17 @@ impl App {
         });
     }
 
-    fn calibrator_controls(&mut self, ui: &mut Ui) {
-        self.calibrator.bb_size(ui);
-        self.calibrator.upper(ui);
-        self.calibrator.lower(ui);
+    fn camera_settings(&mut self, ui: &mut Ui) {
+        self.cam_settings.toggles(ui);
+        self.cam_settings.bb_size(ui);
+        self.cam_settings.upper(ui);
+        self.cam_settings.lower(ui);
     }
 
     fn controls(&mut self, _ui: &mut Ui) {}
 
     fn central_panel(&mut self, ui: &mut Ui) -> crate::Result<()> {
-        let frame = self.turret.vision.get_frame()?;
+        let frame = self.turret.vision.get_frame(self.cam_settings.flip_frame)?;
         let (size, _) = mat_size_and_vec(&to_rgba(&frame, 2)?)?;
         let texture = self.tex_handler.get_or_insert_with(|| {
             ui.ctx().load_texture(
@@ -145,16 +163,20 @@ impl App {
 
         let filtered_frame = self.turret.vision.filter_color(
             &frame,
-            self.calibrator.lower_bound,
-            self.calibrator.upper_bound,
+            self.cam_settings.lower_bound,
+            self.cam_settings.upper_bound,
         )?;
         self.turret.vision.get_contours(&filtered_frame)?;
 
-        let with_bb = self
-            .turret
-            .vision
-            .draw_bb(&frame, self.calibrator.min_bb_size)?;
-        let (size, with_bb_frame) = mat_size_and_vec(&to_rgba(&with_bb, 2)?)?;
+        let result = if self.cam_settings.gray_img {
+            filtered_frame
+        } else {
+            self.turret
+                .vision
+                .draw_bb(&frame, self.cam_settings.min_bb_size)?
+        };
+
+        let (size, with_bb_frame) = mat_size_and_vec(&to_rgba(&result, 2)?)?;
         texture.set(
             ImageData::Color(Arc::new(ColorImage::from_rgba_unmultiplied(
                 size,
@@ -165,8 +187,8 @@ impl App {
 
         ui.image((texture.id(), texture.size_vec2()));
 
-        match self.calibrator_open {
-            true => self.calibrator_controls(ui),
+        match self.cam_settings_open {
+            true => self.camera_settings(ui),
             false => self.controls(ui),
         }
 
@@ -215,6 +237,6 @@ impl eframe::App for App {
     }
 
     fn save(&mut self, storage: &mut dyn Storage) {
-        eframe::set_value(storage, "calibrator", &self.calibrator);
+        eframe::set_value(storage, "cam-settings", &self.cam_settings);
     }
 }

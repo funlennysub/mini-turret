@@ -1,12 +1,13 @@
-use opencv::core::{bitwise_and, in_range, Moments, Point, Scalar, Size, BORDER_DEFAULT};
+use opencv::core::{bitwise_and, flip, in_range, Point, Scalar, Size, BORDER_CONSTANT};
 use opencv::imgproc::{
-    blur, bounding_rect, contour_area, find_contours, moments, put_text, rectangle,
-    CHAIN_APPROX_SIMPLE, COLOR_BGR2HSV, FONT_HERSHEY_PLAIN, LINE_8, RETR_EXTERNAL,
+    bounding_rect, circle, contour_area, cvt_color, find_contours, get_structuring_element,
+    moments, morphology_default_border_value, morphology_ex, put_text, rectangle, resize,
+    CHAIN_APPROX_SIMPLE, COLOR_BGR2HSV, FONT_HERSHEY_PLAIN, INTER_AREA, LINE_8, MORPH_CLOSE,
+    MORPH_ELLIPSE, RETR_EXTERNAL,
 };
 
 use opencv::types::VectorOfVectorOfPoint;
 use opencv::{
-    imgproc::cvt_color,
     prelude::{Mat, MatTraitConst, MatTraitConstManual, VideoCaptureTrait},
     videoio::{self, VideoCapture},
 };
@@ -15,7 +16,6 @@ use opencv::{
 pub struct Vision {
     pub source: Option<VideoCapture>,
     contours: VectorOfVectorOfPoint,
-    moments: Option<Moments>,
 }
 
 pub fn to_rgba(frame: &Mat, code: i32) -> crate::Result<Mat> {
@@ -42,13 +42,32 @@ impl Vision {
         Ok(())
     }
 
-    pub fn get_frame(&mut self) -> crate::Result<Mat> {
+    pub fn disconnect(&mut self) -> crate::Result<()> {
+        if let Some(src) = &mut self.source {
+            src.release()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn get_frame(&mut self, flip_frame: bool) -> crate::Result<Mat> {
         let mut frame = Mat::default();
         if let Some(src) = &mut self.source {
             src.read(&mut frame)?;
         }
 
-        Ok(frame)
+        let new = if flip_frame {
+            let mut flipped = Mat::default();
+            flip(&frame, &mut flipped, 1)?;
+            flipped
+        } else {
+            frame
+        };
+
+        let mut resized = Mat::default();
+        resize(&new, &mut resized, Size::new(640, 480), 0., 0., INTER_AREA)?;
+
+        Ok(resized)
     }
 
     /// Returns GRAY blurred Mat
@@ -67,16 +86,21 @@ impl Vision {
         let mut mask = Mat::default();
         in_range(&hsv_frame, &lower, &upper, &mut mask)?;
 
-        let mut blurred = Mat::default();
-        blur(
+        let kernel = get_structuring_element(MORPH_ELLIPSE, Size::new(10, 10), Point::new(-1, -1))?;
+        let mut morph = Mat::default();
+
+        morphology_ex(
             &mask,
-            &mut blurred,
-            Size::new(3, 3),
+            &mut morph,
+            MORPH_CLOSE,
+            &kernel,
             Point::new(-1, -1),
-            BORDER_DEFAULT,
+            2,
+            BORDER_CONSTANT,
+            morphology_default_border_value()?,
         )?;
 
-        Ok(blurred)
+        Ok(morph)
     }
 
     pub fn get_contours(&mut self, gray_mat: &Mat) -> crate::Result<()> {
@@ -89,30 +113,43 @@ impl Vision {
             Point::default(),
         )?;
 
-        self.moments = Some(moments(&gray_mat, true)?);
-
         self.contours = contours;
 
         Ok(())
     }
 
     pub fn draw_bb(&self, img: &Mat, min_size: f64) -> crate::Result<Mat> {
-        let mut out = Mat::copy(img)?;
+        let mut out = Mat::clone(&img);
 
         for contour in &self.contours {
-            if contour_area(&contour, false)? > min_size {
+            let area = contour_area(&contour, false)?;
+            if area > min_size {
                 let a = bounding_rect(&contour)?;
                 rectangle(&mut out, a, Scalar::new(0., 0., 255., 0.), 3, LINE_8, 0)?;
-                let m = self.moments;
+                let moments = moments(&contour, false)?;
 
+                let color = Scalar::new(230., 255., 255., 0.);
+                let center = (
+                    (moments.m10 / moments.m00) as i32,
+                    (moments.m01 / moments.m00) as i32,
+                );
+
+                circle(
+                    &mut out,
+                    Point::new(center.0, center.1),
+                    5,
+                    color,
+                    -1,
+                    LINE_8,
+                    0,
+                )?;
                 put_text(
                     &mut out,
-                    &m.map(|m| format!("{:.0}, {:.0}", m.m10 / m.m00, m.m01 / m.m00))
-                        .unwrap_or_default(),
+                    &format!("{}, {} - {area}", center.0, center.1),
                     Point::new(a.x, a.y - 10),
                     FONT_HERSHEY_PLAIN,
                     1.,
-                    Scalar::new(230., 255., 255., 0.),
+                    color,
                     2,
                     LINE_8,
                     false,
