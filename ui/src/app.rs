@@ -1,3 +1,4 @@
+use crate::error::Error;
 use backend::cv::vision::{mat_size_and_vec, to_rgba};
 use backend::{list_devices, Turret};
 use eframe::egui::{ImageData, Slider, Ui};
@@ -57,6 +58,9 @@ pub(crate) struct App {
 
     calibrator_open: bool,
     calibrator: Calibrator,
+
+    error: Option<Error>,
+    error_open: bool,
 }
 
 impl App {
@@ -128,9 +132,9 @@ impl App {
 
     fn controls(&mut self, _ui: &mut Ui) {}
 
-    fn central_panel(&mut self, ui: &mut Ui) {
-        let frame = self.turret.vision.get_frame().unwrap();
-        let (size, _) = mat_size_and_vec(&to_rgba(&frame, 2).unwrap()).unwrap();
+    fn central_panel(&mut self, ui: &mut Ui) -> crate::Result<()> {
+        let frame = self.turret.vision.get_frame()?;
+        let (size, _) = mat_size_and_vec(&to_rgba(&frame, 2)?)?;
         let texture = self.tex_handler.get_or_insert_with(|| {
             ui.ctx().load_texture(
                 "camera-frame",
@@ -139,23 +143,18 @@ impl App {
             )
         });
 
-        let filtered_frame = self
-            .turret
-            .vision
-            .filter_color(
-                &frame,
-                self.calibrator.lower_bound,
-                self.calibrator.upper_bound,
-            )
-            .unwrap();
-        self.turret.vision.get_contours(&filtered_frame).unwrap();
+        let filtered_frame = self.turret.vision.filter_color(
+            &frame,
+            self.calibrator.lower_bound,
+            self.calibrator.upper_bound,
+        )?;
+        self.turret.vision.get_contours(&filtered_frame)?;
 
         let with_bb = self
             .turret
             .vision
-            .draw_bb(&frame, self.calibrator.min_bb_size)
-            .unwrap();
-        let (size, with_bb_frame) = mat_size_and_vec(&to_rgba(&with_bb, 2).unwrap()).unwrap();
+            .draw_bb(&frame, self.calibrator.min_bb_size)?;
+        let (size, with_bb_frame) = mat_size_and_vec(&to_rgba(&with_bb, 2)?)?;
         texture.set(
             ImageData::Color(Arc::new(ColorImage::from_rgba_unmultiplied(
                 size,
@@ -170,13 +169,47 @@ impl App {
             true => self.calibrator_controls(ui),
             false => self.controls(ui),
         }
+
+        Ok(())
+    }
+
+    fn show_err(&mut self, ctx: &Context) {
+        egui::Window::new("Error").show(ctx, |ui| {
+            ui.label("An error was encountered:");
+            ui.monospace(self.error.as_ref().unwrap().to_string());
+            ui.horizontal(|ui| {
+                if ui.button("Ok").clicked() {
+                    self.error_open = false
+                }
+            });
+        });
+    }
+
+    fn app(&mut self, ctx: &Context, _frame: &mut Frame) -> crate::Result<()> {
+        if self.error_open {
+            self.show_err(ctx);
+        }
+
+        egui::TopBottomPanel::top("top-row").show(ctx, |ui| self.top_bar(ui));
+
+        egui::CentralPanel::default()
+            .show(ctx, |ui| -> crate::Result<()> { self.central_panel(ui) })
+            .inner?;
+
+        Ok(())
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &Context, _frame: &mut Frame) {
-        egui::TopBottomPanel::top("top-row").show(ctx, |ui| self.top_bar(ui));
-        egui::CentralPanel::default().show(ctx, |ui| self.central_panel(ui));
+        match self.app(ctx, _frame) {
+            Err(err) if !self.error_open => {
+                self.error_open = true;
+                println!("openeds");
+                self.error = Some(err);
+            }
+            _ => {}
+        }
 
         ctx.request_repaint();
     }

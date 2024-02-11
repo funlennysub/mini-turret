@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 pub mod cv;
 pub mod error;
 
-pub type Result<T> = std::result::Result<T, crate::error::Error>;
+pub(crate) type Result<T> = std::result::Result<T, crate::error::Error>;
 
 pub fn list_devices() -> Result<Vec<PathBuf>> {
     Ok(SerialPort::available_ports()?)
