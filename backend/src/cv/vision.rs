@@ -1,10 +1,11 @@
-use opencv::core::{bitwise_and, flip, in_range, Point, Scalar, Size, BORDER_CONSTANT};
+use opencv::core::{flip, in_range, Point, Scalar, Size, BORDER_CONSTANT, BORDER_DEFAULT};
 use opencv::imgproc::{
-    bounding_rect, circle, contour_area, cvt_color, find_contours, get_structuring_element,
-    moments, morphology_default_border_value, morphology_ex, put_text, rectangle, resize,
-    CHAIN_APPROX_SIMPLE, COLOR_BGR2HSV, FONT_HERSHEY_PLAIN, INTER_AREA, LINE_8, MORPH_CLOSE,
-    MORPH_ELLIPSE, RETR_EXTERNAL,
+    circle, contour_area, cvt_color, find_contours, gaussian_blur, get_structuring_element,
+    moments, morphology_default_border_value, morphology_ex, put_text, resize, CHAIN_APPROX_SIMPLE,
+    COLOR_BGR2HSV, FONT_HERSHEY_PLAIN, INTER_AREA, LINE_8, MORPH_CLOSE, MORPH_ELLIPSE, MORPH_OPEN,
+    RETR_EXTERNAL,
 };
+use std::fmt::{Display, Formatter};
 
 use opencv::types::VectorOfVectorOfPoint;
 use opencv::{
@@ -12,10 +13,28 @@ use opencv::{
     videoio::{self, VideoCapture},
 };
 
+// TODO: maybe run vision on separate thread so app is usable in the meantime
+
+const NEG_POINT: Point = Point::new(-1, -1);
+
+struct Target {
+    x: i32,
+    y: i32,
+    area: f64,
+}
+
+impl Display for Target {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, {} :: {}", self.x, self.y, self.area)
+    }
+}
+
 #[derive(Default)]
 pub struct Vision {
     pub source: Option<VideoCapture>,
     contours: VectorOfVectorOfPoint,
+
+    targets: Vec<Target>,
 }
 
 pub fn to_rgba(frame: &Mat, code: i32) -> crate::Result<Mat> {
@@ -70,6 +89,7 @@ impl Vision {
         Ok(resized)
     }
 
+    // TODO: maybe find a better way to denoise
     /// Returns GRAY blurred Mat
     pub fn filter_color(
         &self,
@@ -77,8 +97,11 @@ impl Vision {
         lower_bound: (u8, u8, u8),
         upper_bound: (u8, u8, u8),
     ) -> crate::Result<Mat> {
+        let mut gb = Mat::default();
+        gaussian_blur(&src, &mut gb, Size::new(15, 15), 0., 0., BORDER_DEFAULT)?;
+
         let mut hsv_frame = Mat::default();
-        cvt_color(&src, &mut hsv_frame, COLOR_BGR2HSV, 0)?;
+        cvt_color(&gb, &mut hsv_frame, COLOR_BGR2HSV, 0)?;
 
         let lower = Mat::from_slice(&[lower_bound.0, lower_bound.1, lower_bound.2])?;
         let upper = Mat::from_slice(&[upper_bound.0, upper_bound.1, upper_bound.2])?;
@@ -86,21 +109,34 @@ impl Vision {
         let mut mask = Mat::default();
         in_range(&hsv_frame, &lower, &upper, &mut mask)?;
 
-        let kernel = get_structuring_element(MORPH_ELLIPSE, Size::new(10, 10), Point::new(-1, -1))?;
-        let mut morph = Mat::default();
+        let kernel_close = get_structuring_element(MORPH_ELLIPSE, Size::new(3, 3), NEG_POINT)?;
+        let kernel_open = get_structuring_element(MORPH_ELLIPSE, Size::new(7, 7), NEG_POINT)?;
 
+        let mut morph_open = Mat::default();
         morphology_ex(
             &mask,
-            &mut morph,
-            MORPH_CLOSE,
-            &kernel,
-            Point::new(-1, -1),
+            &mut morph_open,
+            MORPH_OPEN,
+            &kernel_open,
+            NEG_POINT,
             2,
             BORDER_CONSTANT,
             morphology_default_border_value()?,
         )?;
 
-        Ok(morph)
+        let mut morph_close = Mat::default();
+        morphology_ex(
+            &morph_open,
+            &mut morph_close,
+            MORPH_CLOSE,
+            &kernel_close,
+            NEG_POINT,
+            4,
+            BORDER_CONSTANT,
+            morphology_default_border_value()?,
+        )?;
+
+        Ok(morph_close)
     }
 
     pub fn get_contours(&mut self, gray_mat: &Mat) -> crate::Result<()> {
@@ -118,52 +154,56 @@ impl Vision {
         Ok(())
     }
 
-    pub fn draw_bb(&self, img: &Mat, min_size: f64) -> crate::Result<Mat> {
-        let mut out = Mat::clone(&img);
-
-        for contour in &self.contours {
-            let area = contour_area(&contour, false)?;
-            if area > min_size {
-                let a = bounding_rect(&contour)?;
-                rectangle(&mut out, a, Scalar::new(0., 0., 255., 0.), 3, LINE_8, 0)?;
-                let moments = moments(&contour, false)?;
-
-                let color = Scalar::new(230., 255., 255., 0.);
-                let center = (
-                    (moments.m10 / moments.m00) as i32,
-                    (moments.m01 / moments.m00) as i32,
-                );
-
-                circle(
-                    &mut out,
-                    Point::new(center.0, center.1),
-                    5,
-                    color,
-                    -1,
-                    LINE_8,
-                    0,
-                )?;
-                put_text(
-                    &mut out,
-                    &format!("{}, {} - {area}", center.0, center.1),
-                    Point::new(a.x, a.y - 10),
-                    FONT_HERSHEY_PLAIN,
-                    1.,
-                    color,
-                    2,
-                    LINE_8,
-                    false,
-                )?;
+    // TODO: ignore points inside same contour
+    pub fn find_targets(&mut self, min_size: f64) -> crate::Result<()> {
+        let mut targets = Vec::new();
+        for c in &self.contours {
+            let area = contour_area(&c, false)?;
+            if area < min_size {
+                continue;
             }
+
+            let moments = moments(&c, false)?;
+
+            targets.push(Target {
+                x: (moments.m10 / moments.m00) as i32,
+                y: (moments.m01 / moments.m00) as i32,
+                area,
+            });
+        }
+
+        self.targets = targets;
+
+        Ok(())
+    }
+
+    pub fn display_info(&self, img: &Mat) -> crate::Result<Mat> {
+        let mut out = Mat::clone(img);
+        let color = Scalar::new(230., 255., 255., 0.);
+
+        for target in &self.targets {
+            circle(
+                &mut out,
+                Point::new(target.x, target.y),
+                5,
+                color,
+                -1,
+                LINE_8,
+                0,
+            )?;
+            put_text(
+                &mut out,
+                &target.to_string(),
+                Point::new(target.x, target.y - 10),
+                FONT_HERSHEY_PLAIN,
+                1.,
+                color,
+                2,
+                LINE_8,
+                false,
+            )?;
         }
 
         Ok(out)
-    }
-
-    pub fn combine(&self, src: &Mat, mask: &Mat) -> crate::Result<Mat> {
-        let mut and = Mat::default();
-        bitwise_and(&src, &src, &mut and, &mask)?;
-
-        Ok(and)
     }
 }

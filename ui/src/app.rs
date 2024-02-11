@@ -167,13 +167,14 @@ impl App {
             self.cam_settings.upper_bound,
         )?;
         self.turret.vision.get_contours(&filtered_frame)?;
+        self.turret
+            .vision
+            .find_targets(self.cam_settings.min_bb_size)?;
 
         let result = if self.cam_settings.gray_img {
             filtered_frame
         } else {
-            self.turret
-                .vision
-                .draw_bb(&frame, self.cam_settings.min_bb_size)?
+            self.turret.vision.display_info(&frame)?
         };
 
         let (size, with_bb_frame) = mat_size_and_vec(&to_rgba(&result, 2)?)?;
