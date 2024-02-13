@@ -9,9 +9,11 @@ use std::fmt::{Display, Formatter};
 
 use opencv::types::VectorOfVectorOfPoint;
 use opencv::{
-    prelude::{Mat, MatTraitConst, MatTraitConstManual, VideoCaptureTrait},
+    prelude::{MatTraitConst, MatTraitConstManual, VideoCaptureTrait},
     videoio::{self, VideoCapture},
 };
+
+pub use opencv::prelude::Mat;
 
 // TODO: maybe run vision on separate thread so app is usable in the meantime
 
@@ -64,6 +66,7 @@ impl Vision {
     pub fn disconnect(&mut self) -> crate::Result<()> {
         if let Some(src) = &mut self.source {
             src.release()?;
+            self.source = None;
         }
 
         Ok(())
