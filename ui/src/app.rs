@@ -1,6 +1,6 @@
 use crate::error::Error;
 use backend::cv::vision::{mat_size_and_vec, to_rgba, Mat};
-use backend::{list_devices, Turret};
+use backend::Turret;
 use eframe::egui::{ImageData, Slider, Ui, WidgetText};
 use eframe::{
     egui::{self, Color32, ColorImage, Context, TextureHandle, TextureOptions},
@@ -196,8 +196,6 @@ impl CameraSettings {
 pub(crate) struct App {
     context: MyTabViewer,
 
-    port: Option<PathBuf>,
-
     error: Option<Error>,
     error_open: bool,
 
@@ -208,8 +206,6 @@ impl Default for App {
     fn default() -> Self {
         Self {
             context: MyTabViewer::default(),
-
-            port: None,
 
             error: None,
             error_open: false,
@@ -256,37 +252,6 @@ impl App {
         dock_state
     }
 
-    fn port_picker(&mut self, ui: &mut Ui) {
-        let changed = egui::ComboBox::from_label("Port")
-            .selected_text(
-                self.port
-                    .as_ref()
-                    .map(|v| v.to_string_lossy().to_string())
-                    .unwrap_or("None".to_string()),
-            )
-            .show_ui(ui, |ui| {
-                for port in list_devices().unwrap() {
-                    if ui
-                        .selectable_value(
-                            &mut self.port,
-                            Some(port.to_owned()),
-                            format!("{}", port.display()),
-                        )
-                        .clicked()
-                    {
-                        return true;
-                    }
-                }
-                false
-            });
-
-        if let Some(changed) = changed.inner {
-            if changed {
-                println!("CHanged port to {:?}", &self.port)
-            }
-        }
-    }
-
     fn reset_tabs(&mut self, ui: &mut Ui) {
         if ui.button("Reset tabs").clicked() {
             self.tree = Self::create_tabs();
@@ -312,7 +277,6 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut Ui) -> crate::Result<()> {
         ui.horizontal(|ui| -> crate::Result<()> {
-            self.port_picker(ui);
             self.connect_cam(ui)?;
             self.reset_tabs(ui);
 
